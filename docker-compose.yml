@@ -1,0 +1,149 @@
+services:
+
+  # -------------------------------------------------------------------------
+  # PHP-FPM Application Container
+  # Container name matches the live instance: laravel_app
+  # Listens on port 9000 (PHP-FPM default; NOT exposed to host, only to nginx)
+  # -------------------------------------------------------------------------
+  app:
+    container_name: laravel_app
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    working_dir: /var/www/html
+    volumes:
+      # Full project mount — code changes on host are reflected instantly.
+      - .:/var/www/html
+      # Persist composer cache across rebuilds to speed up installs.
+      - composer_cache:/root/.composer/cache
+    environment:
+      # PHP-FPM listens on 9000 inside the container (nginx upstream target).
+      PHP_FPM_PORT: "9000"
+    networks:
+      - laravel_network
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # -------------------------------------------------------------------------
+  # Nginx Web Server
+  # Container name: laravel_nginx
+  # Exposed port: 8080 (host) → 80 (container)
+  # -------------------------------------------------------------------------
+  nginx:
+    container_name: laravel_nginx
+    image: nginx:1.25-alpine
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      # Application files — Nginx serves static assets directly from public/.
+      - .:/var/www/html
+      # Custom Nginx config injected at runtime.
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - laravel_network
+    depends_on:
+      - app
+
+  # -------------------------------------------------------------------------
+  # MySQL 8.0 Database
+  # Container name: laravel_mysql
+  # Exposed port: 3306 (host) → 3306 (container)
+  # Credentials sourced from .env via ${VAR:-fallback} pattern.
+  # -------------------------------------------------------------------------
+  mysql:
+    container_name: laravel_mysql
+    image: mysql:8.0
+    restart: unless-stopped
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: "${DB_ROOT_PASSWORD:-rootsecret}"
+      MYSQL_DATABASE: "${DB_DATABASE:-multi_tenant_api}"
+      MYSQL_USER: "${DB_USERNAME:-laravel}"
+      MYSQL_PASSWORD: "${DB_PASSWORD:-secret}"
+    volumes:
+      # Named volume ensures data persists across container restarts and rebuilds.
+      - mysql_data:/var/lib/mysql
+    networks:
+      - laravel_network
+    healthcheck:
+      # mysqladmin ping is the canonical MySQL health check.
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${DB_ROOT_PASSWORD:-rootsecret}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # -------------------------------------------------------------------------
+  # Redis 7 Cache & Queue Backend
+  # Container name: laravel_redis
+  # Exposed port: 6379 (host) → 6379 (container)
+  # Required by: CACHE_STORE=redis, QUEUE_CONNECTION=redis, REDIS_CLIENT=phpredis
+  # -------------------------------------------------------------------------
+  redis:
+    container_name: laravel_redis
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      # Persist Redis data (api_keys hashes, rate-limit sorted sets, log buffer).
+      - redis_data:/data
+    networks:
+      - laravel_network
+    # Enable AOF persistence so the rate-limit and cache state survive restarts.
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  # -------------------------------------------------------------------------
+  # Queue Worker — api-analytics-processing queue
+  # Runs ProcessApiUsageLogs jobs that bulk-insert usage logs into MySQL.
+  # Separate service so it can be scaled independently of the web container.
+  # -------------------------------------------------------------------------
+  queue:
+    container_name: laravel_queue
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    working_dir: /var/www/html
+    volumes:
+      - .:/var/www/html
+      - composer_cache:/root/.composer/cache
+    # Dedicated to the analytics queue; --tries=3 retries transient failures.
+    command: php artisan queue:work redis --queue=api-analytics-processing --tries=3 --sleep=1 --max-time=3600
+    networks:
+      - laravel_network
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+# ---------------------------------------------------------------------------
+# Named Volumes
+# ---------------------------------------------------------------------------
+volumes:
+  mysql_data:
+    driver: local
+  redis_data:
+    driver: local
+  composer_cache:
+    driver: local
+
+# ---------------------------------------------------------------------------
+# Networks
+# ---------------------------------------------------------------------------
+networks:
+  laravel_network:
+    driver: bridge
