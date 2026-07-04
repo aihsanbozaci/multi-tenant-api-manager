@@ -274,15 +274,15 @@ app/Domain/Api/Gateway/
 #### `api_usage_logs` tablosu
 | Kolon | Tip | Açıklama |
 |-------|-----|----------|
-| `id` | BIGINT AUTO_INCREMENT (PK) | Log satır ID'si |
+| `id` | BIGINT AUTO_INCREMENT (PK) | Sıralı log satır ID'si (yüksek hacimli insert için optimize) |
 | `tenant_id` | UUID | Hangi tenant'a ait |
 | `api_key_id` | BIGINT | Hangi anahtarla yapıldı |
-| `endpoint` | VARCHAR(500) | İstek yapılan URL yolu |
-| `method` | VARCHAR(10) | HTTP metodu |
+| `endpoint` | VARCHAR(512) | İstek yapılan URL yolu |
+| `method` | VARCHAR(16) | HTTP metodu |
 | `status_code` | SMALLINT | Dönen HTTP kodu |
 | `response_time_ms` | INT | Yanıt süresi (ms) |
-| `ip_address` | VARCHAR(45) | İstemci IP (IPv6 destekli) |
-| `created_at` | TIMESTAMP | Kaydedilme tarihi |
+| `payload_size_bytes` | INT | Response body boyutu (byte) |
+| `requested_at` | TIMESTAMP | İsteğin alındığı an (middleware tarafından set edilir) |
 
 > `api_usage_logs` tablosunda kasıtlı olarak **Foreign Key constraint yoktur.** Bu, MySQL yazım gecikmesini azaltır ve tablonun yüksek hacimli insert'lere dayanmasını sağlar.
 
@@ -369,7 +369,7 @@ docker exec laravel_mysql mysql -uroot \
       GRANT ALL PRIVILEGES ON multi_tenant_api_test.* TO 'laravel'@'%';"
 
 # Testleri çalıştırın:
-docker exec laravel_app php artisan test --filter=ApiGatewayGuardMiddlewareTest
+docker exec laravel_app php artisan test
 ```
 
 ---
@@ -435,6 +435,7 @@ Retry-After: 47
 | **Atomik Lua script** | ZREMRANGEBYSCORE+ZCARD arasındaki TOCTOU race condition'ı sıfırlar. |
 | **terminate() ile async log** | HTTP bağlantısı kapatıldıktan sonra çalışır — istemci gecikme hissetmez. |
 | **Redis List buffer + bulk insert** | 50 log tek INSERT → MySQL I/O %98 azalır. |
+| **BIGINT AUTO_INCREMENT (api_usage_logs)** | Append-only log tablosunda sıralı yazım → B-tree fragmentation sıfır. |
 | **`config('api-gateway.tables.*')` ile loose coupling** | Tablo isimleri migration'a hard-code edilmez; future package olarak çıkartılabilir. |
 | **Contracts (Interface) katmanı** | Eloquent bağımlılığı tersine çevrilir; test isolation ve mock'lama kolaylaşır. |
 | **`readonly` DTO'lar** | Veri nesneleri immutable; mutation bug'ları compile-time'da yakalanır. |
@@ -687,15 +688,15 @@ app/Domain/Api/Gateway/
 #### `api_usage_logs` table
 | Column | Type | Description |
 |--------|------|-------------|
-| `id` | BIGINT AUTO_INCREMENT (PK) | Log row ID |
+| `id` | BIGINT AUTO_INCREMENT (PK) | Sequential log row ID (optimised for high-volume inserts) |
 | `tenant_id` | UUID | Which tenant |
 | `api_key_id` | BIGINT | Which key was used |
-| `endpoint` | VARCHAR(500) | Requested URL path |
-| `method` | VARCHAR(10) | HTTP method |
+| `endpoint` | VARCHAR(512) | Requested URL path |
+| `method` | VARCHAR(16) | HTTP method |
 | `status_code` | SMALLINT | HTTP response code |
 | `response_time_ms` | INT | Response time in milliseconds |
-| `ip_address` | VARCHAR(45) | Client IP (IPv6-compatible) |
-| `created_at` | TIMESTAMP | Log entry timestamp |
+| `payload_size_bytes` | INT | Response body size in bytes |
+| `requested_at` | TIMESTAMP | Exact moment the request was received (set by middleware) |
 
 > The `api_usage_logs` table deliberately has **no foreign key constraints** to minimize MySQL write latency and support high-volume insert throughput.
 
@@ -781,8 +782,8 @@ docker exec laravel_mysql mysql -uroot \
   -e "CREATE DATABASE IF NOT EXISTS multi_tenant_api_test; \
       GRANT ALL PRIVILEGES ON multi_tenant_api_test.* TO 'laravel'@'%';"
 
-# Run the test suite:
-docker exec laravel_app php artisan test --filter=ApiGatewayGuardMiddlewareTest
+# Run the full test suite:
+docker exec laravel_app php artisan test
 ```
 
 ---
@@ -847,6 +848,7 @@ Retry-After: 47
 | **Atomic Lua script for rate limiting** | Eliminates the TOCTOU race condition between ZREMRANGEBYSCORE and ZCARD. |
 | **Async logging via terminate()** | Fires after HTTP connection closes — zero client-perceived latency. |
 | **Redis List buffer + bulk INSERT** | 50 log entries written in a single INSERT — reduces MySQL I/O by ~98%. |
+| **BIGINT AUTO_INCREMENT (api_usage_logs)** | Append-only log table benefits from sequential writes — zero B-tree fragmentation. |
 | **`config('api-gateway.tables.*')` for loose coupling** | Table names are not hard-coded; the module can be extracted as a Composer package. |
 | **Contracts (Interface) layer** | Inverts Eloquent dependency; enables test isolation and easy mocking. |
 | **`readonly` DTOs** | Data objects are immutable; mutation bugs are caught at compile time. |

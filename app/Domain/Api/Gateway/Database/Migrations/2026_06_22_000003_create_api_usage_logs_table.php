@@ -10,8 +10,12 @@ use Illuminate\Support\Facades\Schema;
  * Creates the api_usage_logs table.
  *
  * Design decisions:
- *  - UUID primary key: log IDs may be exposed in audit exports; UUID avoids
- *    leaking row counts and is safer for distributed insert scenarios.
+ *  - BIGINT AUTO_INCREMENT primary key: this is a high-volume, append-only
+ *    log table. Random UUID (v4) PKs cause massive B-tree fragmentation on
+ *    every insert because each row lands at a random position in the clustered
+ *    index. AUTO_INCREMENT writes sequentially → zero fragmentation → optimal
+ *    InnoDB insert throughput. The id is never exposed externally, so there
+ *    is no security argument for UUID here.
  *  - No foreign key constraints on tenant_id / api_key_id: this is intentional.
  *    Log entries are written asynchronously via the Redis buffer after the
  *    HTTP response is already sent. By the time the worker flushes, the source
@@ -37,8 +41,9 @@ return new class extends Migration
         $table = config('api-gateway.tables.api_usage_logs', 'api_usage_logs');
 
         Schema::create($table, function (Blueprint $table): void {
-            // UUID primary key — safe for external exposure in audit exports.
-            $table->uuid('id')->primary();
+            // BIGINT AUTO_INCREMENT primary key — sequential writes, zero B-tree
+            // fragmentation, optimal for high-volume append-only insert workloads.
+            $table->id();
 
             // Tenant identifier. Indexed for per-tenant analytics; no FK constraint
             // (see class-level docblock for rationale).

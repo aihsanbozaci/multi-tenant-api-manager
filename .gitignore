@@ -21,6 +21,7 @@
 /public/storage
 /storage/*.key
 /storage/app/*.php
+/storage/app/*.sh
 /storage/pail
 /vendor
 _ide_helper.php

@@ -104,6 +104,8 @@ final readonly class ApiUsageLogEntry
     /**
      * Convert to a flat associative array suitable for DB::table()->insert().
      * Keys match the api_usage_logs column names exactly.
+     * The 'id' column is intentionally omitted — it is a BIGINT AUTO_INCREMENT
+     * primary key that MySQL generates automatically on insert.
      *
      * @return array<string, int|string>
      */

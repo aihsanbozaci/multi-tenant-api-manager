@@ -4,15 +4,15 @@ declare(strict_types=1);
 
 namespace App\Domain\Api\Gateway\Models;
 
-use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 
 /**
  * Eloquent model representing a single API usage log entry.
  *
  * Key design decisions:
- *  - HasUuids: UUID primary key; log IDs may appear in audit exports or
- *    analytics APIs — integers would leak row counts to consumers.
+ *  - BIGINT AUTO_INCREMENT primary key: this is a high-throughput append-only
+ *    table. Sequential inserts avoid B-tree fragmentation. The id is an internal
+ *    surrogate key never exposed in API responses or audit exports.
  *  - $timestamps = false: this table has no created_at / updated_at columns.
  *    The authoritative timestamp is requested_at, set by the middleware at
  *    request time (not by the DB server), to preserve the original request
@@ -26,7 +26,6 @@ use Illuminate\Database\Eloquent\Model;
  */
 class ApiUsageLog extends Model
 {
-    use HasUuids;
 
     /**
      * Disable automatic timestamp management (no created_at / updated_at columns).
